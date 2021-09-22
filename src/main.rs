@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::{collections::BTreeMap, fmt::Write, path::Path};
 
 use anyhow::{bail, Context, Result};
@@ -44,8 +45,18 @@ struct Opt {
 
 #[derive(StructOpt, Debug)]
 enum Subcommand {
-    #[structopt(about = "Display total time tracked per project", display_order = 0)]
-    Summary,
+    #[structopt(
+        about = "Display a summary of the time tracked per project",
+        display_order = 0
+    )]
+    Summary {
+        #[structopt(short, long, conflicts_with_all = &["weekly", "daily"], display_order=0, help = "Time tracked forever")]
+        full: bool,
+        #[structopt(short, long, conflicts_with_all = &["full", "daily"], display_order=1, help = "Time tracked in the past week")]
+        weekly: bool,
+        #[structopt(short, long, conflicts_with_all = &["full", "weekly"], display_order=2, help = "Time tracked today (default)")]
+        daily: bool,
+    },
     #[structopt(about = "Start new timer", display_order = 1)]
     Start {
         #[structopt(help = "Project name (defaults to last project)")]
@@ -59,6 +70,16 @@ enum Subcommand {
     Cancel,
     #[structopt(about = "List raw data", display_order = 4)]
     List,
+}
+
+impl Default for Subcommand {
+    fn default() -> Self {
+        Subcommand::Summary {
+            full: false,
+            weekly: false,
+            daily: true,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -133,7 +154,7 @@ fn main() -> Result<()> {
         vec![]
     };
 
-    match opt.subcommand.unwrap_or(Subcommand::Summary) {
+    match opt.subcommand.unwrap_or_default() {
         Subcommand::Start { project, from } => {
             // Stop previous entry if it's still ongoing
             if let Some(last) = entries.last_mut() {
@@ -209,7 +230,7 @@ fn main() -> Result<()> {
             print!("{}", table);
         }
 
-        Subcommand::Summary => {
+        Subcommand::Summary { full: true, .. } => {
             // BTreeMap instead of HashMap so the keys are sorted :>
             let mut summary = BTreeMap::new();
 
@@ -230,6 +251,154 @@ fn main() -> Result<()> {
                     format!("{:.2}", duration.num_minutes() as f64 / 60.),
                 ]);
             }
+            print!("{}", table);
+
+            if let Some(last) = &entries.last() {
+                if last.is_ongoing() {
+                    println!();
+                    println!(
+                        "Ongoing: {} ({})",
+                        last.project,
+                        duration_to_string(Local::now() - last.start)?
+                    );
+                }
+            }
+        }
+
+        // Weekly
+        Subcommand::Summary { weekly: true, .. } => {
+            // BTreeMap instead of HashMap so the keys are sorted :>
+            let mut summary = BTreeMap::new();
+            let mut daily_total = [Duration::zero(); 7];
+
+            // TODO this doesn't work after midnight
+            let today = Local::today();
+
+            // Collect daily total time on each project
+            for entry in &entries {
+                let end = entry.end.unwrap_or_else(Local::now);
+                let delta = (today - end.date()).num_days() as usize;
+
+                if delta < 7 {
+                    let totals = summary
+                        .entry(entry.project.clone())
+                        .or_insert_with(|| [Duration::zero(); 7]);
+                    totals[delta] = totals[delta] + (end - entry.start);
+                    daily_total[delta] = daily_total[delta] + (end - entry.start);
+                }
+            }
+
+            println!("Summary for the past week");
+            println!();
+
+            fn week_row<T: std::fmt::Debug>(
+                first: impl Into<T>,
+                rest: impl IntoIterator<Item = T>,
+            ) -> [T; 8] {
+                let mut row = vec![first.into()];
+                row.extend(rest.into_iter());
+                row.try_into().unwrap()
+            }
+
+            // Display summary as a table
+            let headers = week_row(
+                "Project".to_owned(),
+                (0..7)
+                    .rev()
+                    .map(|i| today - Duration::days(i))
+                    .map(|d| d.format("%A").to_string())
+                    .collect::<Vec<_>>(),
+            );
+            let alignments = week_row(Alignment::Left, vec![Alignment::Right; 7]);
+
+            let mut table = Table::<8>::new(headers);
+            table.align(alignments);
+            for (project, durations) in summary {
+                let row = week_row(
+                    project,
+                    durations
+                        .iter()
+                        .rev()
+                        .map(|d| format!("{:.2}", d.num_minutes() as f64 / 60.0)),
+                );
+                table.row(row);
+            }
+
+            table.row(vec![String::new(); 8].try_into().unwrap());
+
+            let row = week_row(
+                "TOTAL".to_owned(),
+                daily_total
+                    .iter()
+                    .rev()
+                    .map(|d| format!("{:.2}", d.num_minutes() as f64 / 60.0)),
+            );
+            table.row(row);
+
+            print!("{}", table);
+
+            println!();
+            println!(
+                "Weekly total: {:.2} hours",
+                daily_total
+                    .iter()
+                    .cloned()
+                    .reduce(|x, y| x + y)
+                    .unwrap()
+                    .num_minutes() as f64
+                    / 60.0
+            );
+
+            if let Some(last) = &entries.last() {
+                if last.is_ongoing() {
+                    println!();
+                    println!(
+                        "Ongoing: {} ({})",
+                        last.project,
+                        duration_to_string(Local::now() - last.start)?
+                    );
+                }
+            }
+        }
+
+        // Daily summary
+        Subcommand::Summary { .. } => {
+            // BTreeMap instead of HashMap so the keys are sorted :>
+            let mut summary = BTreeMap::new();
+            let mut daily_total = Duration::zero();
+
+            // TODO allow day start != midnight
+            let today = Local::today();
+
+            // Collect total time on each project
+            for entry in &entries {
+                let end = entry.end.unwrap_or_else(Local::now);
+                if end.date() == today {
+                    let total = summary
+                        .entry(entry.project.clone())
+                        .or_insert_with(Duration::zero);
+                    *total = *total + (end - entry.start);
+                    daily_total = daily_total + (end - entry.start);
+                }
+            }
+
+            println!("Summary for today ({})", today.format("%b %d"));
+            println!();
+
+            // Display summary as a table
+            let mut table = Table::new(["Project", "Hours"]);
+            table.align([Alignment::Left, Alignment::Right]);
+            for (project, duration) in summary {
+                table.row([
+                    project,
+                    format!("{:.2}", duration.num_minutes() as f64 / 60.),
+                ]);
+            }
+            table.row(["", ""]);
+            table.row([
+                "TOTAL".to_owned(),
+                format!("{:.2}", daily_total.num_minutes() as f64 / 60.),
+            ]);
             print!("{}", table);
 
             if let Some(last) = &entries.last() {

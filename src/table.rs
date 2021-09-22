@@ -73,7 +73,7 @@ impl<const N: usize> fmt::Display for Table<N> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum Alignment {
     Left,
     Center,

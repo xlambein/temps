@@ -40,13 +40,21 @@ Summary of time tracked (default behaviour if no subcommand is passed):
 
 ```sh
 $ temps summary
+Summary for today (Sep 22)
+
 Project                   Hours  
 ------------------------  -----  
-studying category theory   5.20  
-world domination          16.05  
+studying category theory   0.15  
+world domination           4.40  
+
+TOTAL                      4.55  
 ------------------------  -----  
 Project                   Hours
+
+Ongoing: word domination (1h 17m)
 ```
+
+Use `temps summary --weekly` and `temps summary --full` for weekly and full summary.
 
 Cancel a timer (deletes the entry):
 
