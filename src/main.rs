@@ -29,6 +29,16 @@ fn parse_start_date(src: &str) -> Result<DateTime<Local>> {
         })
 }
 
+/// Parse a duration.
+///
+/// Expects a duration with format `HH:MM:SS` or `HH:MM`.
+fn parse_duration(src: &str) -> Result<Duration> {
+    Ok(NaiveTime::parse_from_str(src, "%H:%M:%S")
+        .or_else(|_| NaiveTime::parse_from_str(src, "%H:%M"))
+        .context("Could not parse start date")?
+        - NaiveTime::from_hms(0, 0, 0))
+}
+
 #[derive(StructOpt, Debug)]
 #[structopt(about = "Simple time tracker.")]
 struct Opt {
@@ -41,6 +51,15 @@ struct Opt {
         help = "Path for the tracking data"
     )]
     temps_file: String,
+    #[structopt(
+        long,
+        env = "TEMPS_MIDNIGHT_OFFSET",
+        parse(try_from_str = parse_duration),
+        default_value = "00:00",
+        help = "Time at which we consider the current day to have ended"
+        // It's not necessarily midnight because sometimes we make poor choices
+    )]
+    midnight_offset: Duration,
 }
 
 #[derive(StructOpt, Debug)]
@@ -275,9 +294,8 @@ fn main() -> Result<()> {
 
             // Collect daily total time on each project
             for entry in &entries {
-                let start = entry.start;
-                let end = entry.end.unwrap_or_else(Local::now);
-                let delta = (today - end.date()).num_days() as usize;
+                let start = entry.start - opt.midnight_offset;
+                let end = entry.end.unwrap_or_else(Local::now) - opt.midnight_offset;
 
                 // Iterate over every day between `start` and `end`.
                 // `min(6)` ensures that we don't consider start dates beyond one week
@@ -380,17 +398,15 @@ fn main() -> Result<()> {
             let mut summary = BTreeMap::new();
             let mut daily_total = Duration::zero();
 
-            // TODO allow day start != midnight
             let today = Local::today();
 
             // Collect total time on each project
             for entry in &entries {
                 // Actual start time is max(today at midnight, start),
                 // in case the entry started the day before
-                let start = entry
-                    .start
+                let start = (entry.start - opt.midnight_offset)
                     .max(today.and_time(NaiveTime::from_hms(0, 0, 0)).unwrap());
-                let end = entry.end.unwrap_or_else(Local::now);
+                let end = entry.end.unwrap_or_else(Local::now) - opt.midnight_offset;
 
                 if end.date() == today {
                     let total = summary
