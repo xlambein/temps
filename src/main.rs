@@ -271,20 +271,33 @@ fn main() -> Result<()> {
             let mut summary = BTreeMap::new();
             let mut daily_total = [Duration::zero(); 7];
 
-            // TODO this doesn't work after midnight
             let today = Local::today();
 
             // Collect daily total time on each project
             for entry in &entries {
+                let start = entry.start;
                 let end = entry.end.unwrap_or_else(Local::now);
                 let delta = (today - end.date()).num_days() as usize;
 
-                if delta < 7 {
+                // Iterate over every day between `start` and `end`.
+                // `min(6)` ensures that we don't consider start dates beyond one week
+                for delta in (today - end.date()).num_days() as usize
+                    ..=(today - start.date()).num_days().min(6) as usize
+                {
                     let totals = summary
                         .entry(entry.project.clone())
                         .or_insert_with(|| [Duration::zero(); 7]);
-                    totals[delta] = totals[delta] + (end - entry.start);
-                    daily_total[delta] = daily_total[delta] + (end - entry.start);
+
+                    // Duration is min(end, today - delta + 1 day) - max(start, today - delta)
+                    let duration = end.min(
+                        today.and_time(NaiveTime::from_hms(0, 0, 0)).unwrap()
+                            - Duration::days(delta as i64 - 1),
+                    ) - start.max(
+                        today.and_time(NaiveTime::from_hms(0, 0, 0)).unwrap()
+                            - Duration::days(delta as i64),
+                    );
+                    totals[delta] = totals[delta] + duration;
+                    daily_total[delta] = daily_total[delta] + duration;
                 }
             }
 
@@ -372,13 +385,21 @@ fn main() -> Result<()> {
 
             // Collect total time on each project
             for entry in &entries {
+                // Actual start time is max(today at midnight, start),
+                // in case the entry started the day before
+                let start = entry
+                    .start
+                    .max(today.and_time(NaiveTime::from_hms(0, 0, 0)).unwrap());
                 let end = entry.end.unwrap_or_else(Local::now);
+
                 if end.date() == today {
                     let total = summary
                         .entry(entry.project.clone())
                         .or_insert_with(Duration::zero);
-                    *total = *total + (end - entry.start);
-                    daily_total = daily_total + (end - entry.start);
+
+                    let duration = end - start;
+                    *total = *total + duration;
+                    daily_total = daily_total + duration;
                 }
             }
 
