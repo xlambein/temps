@@ -86,7 +86,10 @@ enum Subcommand {
         from: Option<DateTime<Local>>,
     },
     #[structopt(about = "Stop ongoing timer", display_order = 2)]
-    Stop,
+    Stop {
+        #[structopt(long, short, parse(try_from_str = parse_start_date), help = "Stop date (defaults to now)")]
+        at: Option<DateTime<Local>>,
+    },
     #[structopt(about = "Cancel ongoing timer", display_order = 3)]
     Cancel,
     #[structopt(about = "List raw data", display_order = 4)]
@@ -136,7 +139,20 @@ impl Entry {
 
     /// Stop the entry at the current date/time.
     fn stop(&mut self) {
-        self.end = Some(Local::now().trunc_subsecs(0))
+        self.stop_at(Local::now())
+    }
+
+    /// Stop the entry at a specific date/time.
+    ///
+    /// Panics if the end time is in the future, or is before the start time.
+    fn stop_at(&mut self, end: DateTime<Local>) {
+        if end > Local::now() {
+            panic!("End date is in the future");
+        }
+        if end < self.start {
+            panic!("End date is before start date");
+        }
+        self.end = Some(end.trunc_subsecs(0))
     }
 
     /// Check whether the entry is still tracking time.
@@ -204,14 +220,18 @@ fn main() -> Result<()> {
             write_back(path, &entries)?;
         }
 
-        Subcommand::Stop => {
+        Subcommand::Stop { at } => {
             let last = entries.last_mut().context("No previous entry exists")?;
 
             if !last.is_ongoing() {
                 bail!("No ongoing entry");
             }
 
-            last.stop();
+            if let Some(at) = at {
+                last.stop_at(at);
+            } else {
+                last.stop();
+            }
             eprintln!("Stopped '{}'.", last.project);
 
             write_back(path, &entries)?;
