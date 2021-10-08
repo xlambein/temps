@@ -1,4 +1,6 @@
 use std::convert::TryInto;
+use std::env;
+use std::process::Command;
 use std::{collections::BTreeMap, fmt::Write, path::Path};
 
 use anyhow::{bail, Context, Result};
@@ -89,6 +91,8 @@ enum Subcommand {
     Cancel,
     #[structopt(about = "List raw data", display_order = 4)]
     List,
+    #[structopt(about = "Edit raw data with default editor", display_order = 5)]
+    Edit,
 }
 
 impl Default for Subcommand {
@@ -448,6 +452,15 @@ fn main() -> Result<()> {
                     );
                 }
             }
+        }
+
+        Subcommand::Edit => {
+            let editor = env::var("EDITOR")
+                .expect("no default editor, set the $EDITOR environment variable");
+            Command::new(&editor)
+                .arg(&opt.temps_file)
+                .status()
+                .expect(&format!("could run editor '{}'", editor));
         }
     }
 
