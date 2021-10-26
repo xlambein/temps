@@ -77,4 +77,40 @@ $ temps start "learning rust" --from 16:41
 Started 'learning rust'.
 ```
 
+Display a graph of the time spent on a given day (defaults to today):
+
+``` sh
+$ temps viz
+▁▁▁▁▁▁
+10:00 
+      ▀▀▀▀▀▀▀▀ studying category theory
+      
+▁▁▁▁▁▁████████ world domination
+12:00 
+      
+      
+▁▁▁▁▁▁
+14:00 
+      ▅▅▅▅▅▅▅▅ learning javascript
+      
+▁▁▁▁▁▁
+16:00 
+      ████████ learning javascript / learning rust
+      ████████
+▁▁▁▁▁▁████████
+18:00 
+$ # Also works with:
+$ temps viz yesterday
+$ temps viz "5 days ago"
+$ temps viz 2021-08-10
+```
+
+Edit the raw data with your `$EDITOR`:
+
+``` sh
+$ temps edit
+```
+
 Tracking data is stored in `~/temps.tsv`.  This location can be changed by setting the environment variable `TEMPS_FILE`, or by passing `--temps-file [PATH]` to `temps`.
+
+By default, the day is assumed to start at midnight of your local timezone.  To change that, you can set the `TEMPS_MIDNIGHT_OFFSET` environment variable, or pass the `--midnight-offset` option.  It expects a duration of the form `HH:MM` or `HH:MM:SS`.
