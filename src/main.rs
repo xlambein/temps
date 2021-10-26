@@ -3,7 +3,7 @@ use std::env;
 use std::process::Command;
 use std::{collections::BTreeMap, fmt::Write, path::Path};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{prelude::*, Duration};
 use csv::{ReaderBuilder, WriterBuilder};
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,10 @@ use structopt::StructOpt;
 mod table;
 
 use table::{Alignment, Table};
+
+const FULL_BLOCK: char = '█';
+const UPPER_HALF_BLOCK: char = '▀';
+const LOWER_HALF_BLOCK: char = '▅';
 
 /// Parse a start date.
 ///
@@ -39,6 +43,37 @@ fn parse_duration(src: &str) -> Result<Duration> {
         .or_else(|_| NaiveTime::parse_from_str(src, "%H:%M"))
         .context("Could not parse start date")?
         - NaiveTime::from_hms(0, 0, 0))
+}
+
+/// Parse a date.
+///
+/// Expects either `YYYY-mm-dd`, `today`, `yesterday`, or `N days ago` where `N`
+/// is a positive integer.
+fn parse_date(src: &str) -> Result<Date<Local>> {
+    NaiveDate::parse_from_str(src, "%Y-%m-%d")
+        .map_err(anyhow::Error::from)
+        .and_then(|d| {
+            Local
+                .from_local_date(&d)
+                .single()
+                .ok_or(anyhow!("Ambiguous date"))
+        })
+        .or_else(|err| {
+            if src == "today" {
+                Ok(Local::today())
+            } else if src == "yesterday" {
+                Ok(Local::today() - Duration::days(1))
+            } else if let Some((days, s)) = src.split_once(" ") {
+                if s.trim() == "days ago" {
+                    if let Ok(days) = days.parse() {
+                        return Ok(Local::today() - Duration::days(days));
+                    }
+                }
+                Err(err)
+            } else {
+                Err(err)
+            }
+        })
 }
 
 #[derive(StructOpt, Debug)]
@@ -96,6 +131,15 @@ enum Subcommand {
     List,
     #[structopt(about = "Edit raw data with default editor", display_order = 5)]
     Edit,
+    #[structopt(
+        about = "Visualize time spent on a given day",
+        display_order = 5,
+        name = "viz"
+    )]
+    Visualize {
+        #[structopt(parse(try_from_str = parse_date), help = "Date (defaults to today)")]
+        date: Option<Date<Local>>,
+    },
 }
 
 impl Default for Subcommand {
@@ -481,6 +525,121 @@ fn main() -> Result<()> {
                 .arg(&opt.temps_file)
                 .status()
                 .expect(&format!("could run editor '{}'", editor));
+        }
+
+        Subcommand::Visualize { date } => {
+            // TODO a possibly more elegant way of doing all this is to use a sort of
+            //   hash map or something, which can be queried for each slot.  Then, we
+            //   iterate from the first slot we care about (i.e., slightly before the
+            //   first project slot), and query two slots at a time, displaying them
+            //   if there's a project.  This would also make it easier to scale this to
+            //   multiple projects.
+
+            let midnight = NaiveTime::from_hms(0, 0, 0);
+            let date = date
+                .unwrap_or_else(Local::today)
+                .and_time(midnight)
+                .expect(&format!("Invalid datetime {:?} at midnight", date));
+            let next_date = date + Duration::days(1);
+
+            let mut slots = vec![];
+            let mut previous_end = None;
+
+            for entry in &entries {
+                let start = entry.start;
+                let end = entry.end.unwrap_or_else(Local::now);
+
+                // Does the entry overlap with today?
+                if start < next_date && end >= date {
+                    // Convert start/end to quarter-hours
+                    let s = ((start.max(date).time() - midnight).num_minutes() as f32 / 15.).round()
+                        as i64;
+                    let e = ((end.min(next_date).time() - midnight).num_minutes() as f32 / 15.)
+                        .round() as i64;
+                    if s == e {
+                        // Skip very short slots
+                        continue;
+                    }
+
+                    // Prepend empty slots before the first project slot
+                    // We round at a half hour, that way the time is displayed properly
+                    if previous_end.is_none() {
+                        previous_end = Some((s / 8) * 8 - 2);
+                    }
+
+                    // Fill with empty slots since last entry
+                    if let Some(previous_end) = previous_end {
+                        slots.extend((previous_end..s).into_iter().map(|i| (i, None)));
+                    }
+                    previous_end = Some(e);
+
+                    // Fill with project slots for the duration of the entry
+                    slots.extend((s..e).into_iter().map(|i| (i, Some(&entry.project))));
+                }
+            }
+
+            // Add one or two empty slots at the end if we're close to a two-hour mark
+            // This makes the display slightly prettier :>
+            if let Some((last, _)) = slots.last() {
+                let last = *last; // Otherwise rustc says we can't mutate `slots` :<
+                if last % 8 >= 6 {
+                    slots.extend(
+                        ((last + 1)..=(last / 8 + 1) * 8)
+                            .into_iter()
+                            .map(|i| (i, None)),
+                    );
+                }
+            }
+
+            let mut previous_project = None;
+            let width = 8;
+            for chunks in slots.chunks(2) {
+                let i = chunks[0].0;
+                // Display the time every two hours
+                if i % 8 == 0 {
+                    print!(
+                        "{} ",
+                        (midnight + Duration::minutes(i * 15)).format("%H:%M")
+                    );
+                } else if i % 8 == 6 {
+                    print!("▁▁▁▁▁▁");
+                } else {
+                    print!("      ");
+                }
+
+                // Display the current two slots with half-blocks
+                match chunks {
+                    &[(_, None), (_, None)] | &[(_, None)] => {
+                        previous_project = None;
+                    }
+                    &[(_, None), (_, Some(p1))] => {
+                        print!("{}", LOWER_HALF_BLOCK.to_string().repeat(width));
+                        print!(" {}", p1);
+                        previous_project = Some(p1);
+                    }
+                    &[(_, Some(p0)), (_, None)] | &[(_, Some(p0))] => {
+                        print!("{}", UPPER_HALF_BLOCK.to_string().repeat(width));
+                        if previous_project != Some(p0) {
+                            print!(" {}", p0);
+                        }
+                        previous_project = None;
+                    }
+                    &[(_, Some(p0)), (_, Some(p1))] => {
+                        print!("{}", FULL_BLOCK.to_string().repeat(width));
+                        if previous_project != Some(p0) {
+                            print!(" {}", p0);
+                            if p0 != p1 {
+                                print!(" / {}", p1);
+                            }
+                        } else if p0 != p1 {
+                            print!(" {}", p1);
+                        }
+                        previous_project = Some(p1);
+                    }
+                    _ => unreachable!(),
+                }
+                println!();
+            }
         }
     }
 
