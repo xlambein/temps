@@ -353,13 +353,10 @@ fn main() -> Result<()> {
             }
 
             // Display summary as a table
-            let mut table = Table::new(["Project", "Hours"]);
+            let mut table = Table::new(["Project", "Time"]);
             table.align([Alignment::Left, Alignment::Right]);
             for (project, duration) in summary {
-                table.row([
-                    project,
-                    format!("{:.2}", duration.num_minutes() as f64 / 60.),
-                ]);
+                table.row([project, format!("{}", duration_to_string(duration)?)]);
             }
             print!("{}", table);
 
@@ -438,10 +435,12 @@ fn main() -> Result<()> {
             for (project, durations) in summary {
                 let row = week_row(
                     project,
-                    durations
-                        .iter()
-                        .rev()
-                        .map(|d| format!("{:.2}", d.num_minutes() as f64 / 60.0)),
+                    durations.into_iter().rev().map(|d| {
+                        format!(
+                            "{}",
+                            duration_to_string(d).expect("could not format duration")
+                        )
+                    }),
                 );
                 table.row(row);
             }
@@ -450,10 +449,12 @@ fn main() -> Result<()> {
 
             let row = week_row(
                 "TOTAL".to_owned(),
-                daily_total
-                    .iter()
-                    .rev()
-                    .map(|d| format!("{:.2}", d.num_minutes() as f64 / 60.0)),
+                daily_total.into_iter().rev().map(|d| {
+                    format!(
+                        "{}",
+                        duration_to_string(d).expect("could not format duration")
+                    )
+                }),
             );
             table.row(row);
 
@@ -461,14 +462,8 @@ fn main() -> Result<()> {
 
             println!();
             println!(
-                "Weekly total: {:.2} hours",
-                daily_total
-                    .iter()
-                    .cloned()
-                    .reduce(|x, y| x + y)
-                    .unwrap()
-                    .num_minutes() as f64
-                    / 60.0
+                "Weekly total: {}",
+                duration_to_string(daily_total.into_iter().reduce(std::ops::Add::add).unwrap())?
             );
 
             if let Some(last) = &entries.last() {
@@ -514,18 +509,15 @@ fn main() -> Result<()> {
             println!();
 
             // Display summary as a table
-            let mut table = Table::new(["Project", "Hours"]);
+            let mut table = Table::new(["Project", "Time"]);
             table.align([Alignment::Left, Alignment::Right]);
             for (project, duration) in summary {
-                table.row([
-                    project,
-                    format!("{:.2}", duration.num_minutes() as f64 / 60.),
-                ]);
+                table.row([project, format!("{}", duration_to_string(duration)?)]);
             }
             table.row(["", ""]);
             table.row([
                 "TOTAL".to_owned(),
-                format!("{:.2}", daily_total.num_minutes() as f64 / 60.),
+                format!("{}", duration_to_string(daily_total)?),
             ]);
             print!("{}", table);
 
@@ -694,9 +686,10 @@ fn duration_to_string(duration: Duration) -> Result<String, std::fmt::Error> {
 
     let mut result = String::new();
     if hours > 0 {
-        write!(result, "{}h ", hours)?;
+        write!(result, "{}h {:02}m", hours, minutes)?;
+    } else {
+        write!(result, "{}m", minutes)?;
     }
-    write!(result, "{}m", minutes)?;
 
     Ok(result)
 }

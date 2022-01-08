@@ -42,14 +42,14 @@ Summary of time tracked (default behaviour if no subcommand is passed):
 $ temps summary
 Summary for today (Sep 22)
 
-Project                   Hours  
-------------------------  -----  
-studying category theory   0.15  
-world domination           4.40  
+Project                     Time  
+------------------------  ------  
+studying category theory      9m  
+world domination          4h 24m  
 
-TOTAL                      4.55  
-------------------------  -----  
-Project                   Hours
+TOTAL                     4h 33m  
+------------------------  ------  
+Project                     Time
 
 Ongoing: word domination (1h 17m)
 ```
