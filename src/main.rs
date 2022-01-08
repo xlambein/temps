@@ -17,7 +17,8 @@ use table::{Alignment, Table};
 
 const FULL_BLOCK: char = '█';
 const UPPER_HALF_BLOCK: char = '▀';
-const LOWER_HALF_BLOCK: char = '▅';
+const LOWER_HALF_BLOCK: char = '▄';
+const LOWER_BORDER: char = '▁';
 
 /// Parse a start date.
 ///
@@ -607,19 +608,21 @@ fn main() -> Result<()> {
             }
 
             let mut previous_project = None;
+            let times_width = 6;
             let width = 8;
             for chunks in slots.chunks(2) {
                 let i = chunks[0].0;
                 // Display the time every two hours
                 if i % 8 == 0 {
                     print!(
-                        "{} ",
-                        (midnight + Duration::minutes(i * 15)).format("%H:%M")
+                        "{:width$} ",
+                        (midnight + Duration::minutes(i * 15)).format("%H:%M"),
+                        width = times_width - 1
                     );
                 } else if i % 8 == 6 {
-                    print!("▁▁▁▁▁▁");
+                    print!("{}", LOWER_BORDER.to_string().repeat(times_width));
                 } else {
-                    print!("      ");
+                    print!("{}", " ".repeat(times_width));
                 }
 
                 // Display the current two slots with half-blocks

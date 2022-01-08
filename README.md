@@ -91,7 +91,7 @@ $ temps viz
       
 ▁▁▁▁▁▁
 14:00 
-      ▅▅▅▅▅▅▅▅ learning javascript
+      ▄▄▄▄▄▄▄▄ learning javascript
       
 ▁▁▁▁▁▁
 16:00 
