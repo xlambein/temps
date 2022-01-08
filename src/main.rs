@@ -5,9 +5,9 @@ use std::{collections::BTreeMap, fmt::Write, path::Path};
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{prelude::*, Duration};
+use clap::Parser;
 use csv::{ReaderBuilder, WriterBuilder};
 use serde::{Deserialize, Serialize};
-use structopt::StructOpt;
 
 mod table;
 
@@ -76,19 +76,19 @@ fn parse_date(src: &str) -> Result<Date<Local>> {
         })
 }
 
-#[derive(StructOpt, Debug)]
-#[structopt(about = "Simple time tracker.")]
-struct Opt {
-    #[structopt(subcommand)]
+#[derive(Parser, Debug)]
+#[clap(about = "Simple time tracker.", version, author)]
+struct Args {
+    #[clap(subcommand)]
     subcommand: Option<Subcommand>,
-    #[structopt(
+    #[clap(
         long,
         env,
         default_value = "~/temps.tsv",
         help = "Path for the tracking data"
     )]
     temps_file: String,
-    #[structopt(
+    #[clap(
         long,
         env = "TEMPS_MIDNIGHT_OFFSET",
         parse(try_from_str = parse_duration),
@@ -99,45 +99,45 @@ struct Opt {
     midnight_offset: Duration,
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Parser, Debug)]
 enum Subcommand {
-    #[structopt(
+    #[clap(
         about = "Display a summary of the time tracked per project",
         display_order = 0
     )]
     Summary {
-        #[structopt(short, long, conflicts_with_all = &["weekly", "daily"], display_order=0, help = "Time tracked forever")]
+        #[clap(short, long, conflicts_with_all = &["weekly", "daily"], display_order=0, help = "Time tracked forever")]
         full: bool,
-        #[structopt(short, long, conflicts_with_all = &["full", "daily"], display_order=1, help = "Time tracked in the past week")]
+        #[clap(short, long, conflicts_with_all = &["full", "daily"], display_order=1, help = "Time tracked in the past week")]
         weekly: bool,
-        #[structopt(short, long, conflicts_with_all = &["full", "weekly"], display_order=2, help = "Time tracked today (default)")]
+        #[clap(short, long, conflicts_with_all = &["full", "weekly"], display_order=2, help = "Time tracked today (default)")]
         daily: bool,
     },
-    #[structopt(about = "Start new timer", display_order = 1)]
+    #[clap(about = "Start new timer", display_order = 1)]
     Start {
-        #[structopt(help = "Project name (defaults to last project)")]
+        #[clap(help = "Project name (defaults to last project)")]
         project: Option<String>,
-        #[structopt(long, short, parse(try_from_str = parse_start_date), help = "Start date (defaults to now)")]
+        #[clap(long, short, parse(try_from_str = parse_start_date), help = "Start date (defaults to now)")]
         from: Option<DateTime<Local>>,
     },
-    #[structopt(about = "Stop ongoing timer", display_order = 2)]
+    #[clap(about = "Stop ongoing timer", display_order = 2)]
     Stop {
-        #[structopt(long, short, parse(try_from_str = parse_start_date), help = "Stop date (defaults to now)")]
+        #[clap(long, short, parse(try_from_str = parse_start_date), help = "Stop date (defaults to now)")]
         at: Option<DateTime<Local>>,
     },
-    #[structopt(about = "Cancel ongoing timer", display_order = 3)]
+    #[clap(about = "Cancel ongoing timer", display_order = 3)]
     Cancel,
-    #[structopt(about = "List raw data", display_order = 4)]
+    #[clap(about = "List raw data", display_order = 4)]
     List,
-    #[structopt(about = "Edit raw data with default editor", display_order = 5)]
+    #[clap(about = "Edit raw data with default editor", display_order = 5)]
     Edit,
-    #[structopt(
+    #[clap(
         about = "Visualize time spent on a given day",
         display_order = 5,
         name = "viz"
     )]
     Visualize {
-        #[structopt(parse(try_from_str = parse_date), help = "Date (defaults to today)")]
+        #[clap(parse(try_from_str = parse_date), help = "Date (defaults to today)")]
         date: Option<Date<Local>>,
     },
 }
@@ -220,9 +220,9 @@ fn write_back<P: AsRef<Path>>(path: P, entries: &[Entry]) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let opt = Opt::from_args();
+    let args = Args::parse();
 
-    let path = Path::new(&opt.temps_file);
+    let path = Path::new(&args.temps_file);
 
     // Read entry file if it exists
     let mut entries = if path.exists() {
@@ -237,7 +237,7 @@ fn main() -> Result<()> {
         vec![]
     };
 
-    match opt.subcommand.unwrap_or_default() {
+    match args.subcommand.unwrap_or_default() {
         Subcommand::Start { project, from } => {
             // Stop previous entry if it's still ongoing
             if let Some(last) = entries.last_mut() {
@@ -362,8 +362,8 @@ fn main() -> Result<()> {
 
             // Collect daily total time on each project
             for entry in &entries {
-                let start = entry.start - opt.midnight_offset;
-                let end = entry.end.unwrap_or_else(Local::now) - opt.midnight_offset;
+                let start = entry.start - args.midnight_offset;
+                let end = entry.end.unwrap_or_else(Local::now) - args.midnight_offset;
 
                 // Iterate over every day between `start` and `end`.
                 // `min(6)` ensures that we don't consider start dates beyond one week
@@ -472,9 +472,9 @@ fn main() -> Result<()> {
             for entry in &entries {
                 // Actual start time is max(today at midnight, start),
                 // in case the entry started the day before
-                let start = (entry.start - opt.midnight_offset)
+                let start = (entry.start - args.midnight_offset)
                     .max(today.and_time(NaiveTime::from_hms(0, 0, 0)).unwrap());
-                let end = entry.end.unwrap_or_else(Local::now) - opt.midnight_offset;
+                let end = entry.end.unwrap_or_else(Local::now) - args.midnight_offset;
 
                 if end.date() == today {
                     let total = summary
@@ -522,7 +522,7 @@ fn main() -> Result<()> {
             let editor = env::var("EDITOR")
                 .expect("no default editor, set the $EDITOR environment variable");
             Command::new(&editor)
-                .arg(&opt.temps_file)
+                .arg(&args.temps_file)
                 .status()
                 .expect(&format!("could run editor '{}'", editor));
         }
