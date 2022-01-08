@@ -1,11 +1,13 @@
 use std::convert::TryInto;
 use std::env;
+use std::io::Write as _;
 use std::process::Command;
-use std::{collections::BTreeMap, fmt::Write, path::Path};
+use std::{collections::BTreeMap, fmt::Write as _, path::Path};
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{prelude::*, Duration};
-use clap::Parser;
+use clap::{IntoApp, Parser};
+use clap_complete::{generate, Shell};
 use csv::{ReaderBuilder, WriterBuilder};
 use serde::{Deserialize, Serialize};
 
@@ -97,6 +99,12 @@ struct Args {
         // It's not necessarily midnight because sometimes we make poor choices
     )]
     midnight_offset: Duration,
+    #[clap(
+        long,
+        value_name = "SHELL",
+        help = "Generate completions for a given shell"
+    )]
+    generate_completions: Option<Shell>,
 }
 
 #[derive(Parser, Debug)]
@@ -221,6 +229,21 @@ fn write_back<P: AsRef<Path>>(path: P, entries: &[Entry]) -> Result<()> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if let Some(shell) = args.generate_completions {
+        // Generate completions then exit
+        let mut app = Args::into_app();
+        let bin_name = app.get_name().to_string();
+
+        if shell == Shell::Fish {
+            // For fish shell, never complete on file names
+            writeln!(std::io::stdout(), "complete -c {} -f", bin_name).unwrap();
+        }
+
+        generate(shell, &mut app, bin_name, &mut std::io::stdout());
+
+        return Ok(());
+    }
 
     let path = Path::new(&args.temps_file);
 

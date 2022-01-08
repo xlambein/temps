@@ -114,3 +114,17 @@ $ temps edit
 Tracking data is stored in `~/temps.tsv`.  This location can be changed by setting the environment variable `TEMPS_FILE`, or by passing `--temps-file [PATH]` to `temps`.
 
 By default, the day is assumed to start at midnight of your local timezone.  To change that, you can set the `TEMPS_MIDNIGHT_OFFSET` environment variable, or pass the `--midnight-offset` option.  It expects a duration of the form `HH:MM` or `HH:MM:SS`.
+
+## Autocompletions
+
+Autocompletions for common shells are provided courtesy of [`clap_complete`](https://crates.io/crates/clap_complete).  Just pipe the output of the following command into the appropriate file for your shell.
+
+``` sh
+$ temps --generate-completions <SHELL>
+```
+
+For example, if you're using Fish Shell:
+
+``` sh
+$ temps --generate-completions fish > ~/.config/fish/completions/temps.fish
+```
