@@ -1,15 +1,17 @@
 use std::convert::TryInto;
 use std::env;
-use std::io::Write as _;
 use std::process::Command;
-use std::{collections::BTreeMap, fmt::Write as _, path::Path};
+use std::{collections::BTreeMap, fmt::Write, path::Path};
 
-use anyhow::{anyhow, bail, Context, Result};
-use chrono::{prelude::*, Duration};
+use anyhow::{bail, Context, Result};
 use clap::{IntoApp, Parser};
 use clap_complete::{generate, Shell};
 use csv::{ReaderBuilder, WriterBuilder};
 use serde::{Deserialize, Serialize};
+use time::ext::NumericalDuration;
+use time::format_description::well_known::Rfc3339;
+use time::macros::format_description;
+use time::{Date, Duration, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 
 mod table;
 
@@ -20,56 +22,79 @@ const UPPER_HALF_BLOCK: char = '▀';
 const LOWER_HALF_BLOCK: char = '▄';
 const LOWER_BORDER: char = '▁';
 
-/// Parse a start date.
+trait TruncateSubseconds {
+    fn truncate_subseconds(self) -> Self;
+}
+
+impl TruncateSubseconds for Time {
+    fn truncate_subseconds(self) -> Self {
+        let (h, m, s) = self.as_hms();
+        Time::from_hms(h, m, s).unwrap()
+    }
+}
+
+impl TruncateSubseconds for PrimitiveDateTime {
+    fn truncate_subseconds(self) -> Self {
+        self.replace_time(self.time().truncate_subseconds())
+    }
+}
+
+impl TruncateSubseconds for OffsetDateTime {
+    fn truncate_subseconds(self) -> Self {
+        self.replace_time(self.time().truncate_subseconds())
+    }
+}
+
+/// Parse a date and time, possibly inferring the date.
 ///
 /// Expects either an RFC3339-formatted date/time, or a time with format
 /// `HH:MM:SS` or `HH:MM` (in which case the date is set to the current date).
-fn parse_start_date(src: &str) -> Result<DateTime<Local>> {
-    DateTime::parse_from_rfc3339(src)
-        .map(|dt| dt.with_timezone(&Local))
+fn parse_datetime(src: &str) -> Result<OffsetDateTime> {
+    PrimitiveDateTime::parse(src, &Rfc3339)
+        .map_err(anyhow::Error::from)
+        .and_then(|dt| Ok(dt.assume_offset(UtcOffset::current_local_offset()?)))
         .or_else(|_| {
-            Local::now()
-                .date()
-                .and_time(
-                    NaiveTime::parse_from_str(src, "%H:%M:%S")
-                        .or_else(|_| NaiveTime::parse_from_str(src, "%H:%M"))?,
-                )
-                .context("Could not parse start date")
+            // Try to parse either HH:MM:SS or HH:MM:SS
+            let time = Time::parse(src, &format_description!("[hour]:[minute]:[second]"))
+                .or_else(|_| Time::parse(src, &format_description!("[hour]:[minute]")))?;
+            // Extend time with current date
+            OffsetDateTime::now_local()
+                .map_err(anyhow::Error::from)
+                .map(|dt| dt.replace_time(time))
         })
+        .context("Could not parse start date")
 }
 
 /// Parse a duration.
 ///
 /// Expects a duration with format `HH:MM:SS` or `HH:MM`.
 fn parse_duration(src: &str) -> Result<Duration> {
-    Ok(NaiveTime::parse_from_str(src, "%H:%M:%S")
-        .or_else(|_| NaiveTime::parse_from_str(src, "%H:%M"))
-        .context("Could not parse start date")?
-        - NaiveTime::from_hms(0, 0, 0))
+    // Try to parse a time
+    Time::parse(src, &format_description!("[hour]:[minute]:[second]"))
+        .or_else(|_| Time::parse(src, &format_description!("[hour]:[minute]")))
+        .context("Could not parse duration")
+        // Convert it to a duration by subtracting midnight
+        .map(|time| time - Time::MIDNIGHT)
 }
 
-/// Parse a date.
+/// Parse a (possibly relative) date.
 ///
 /// Expects either `YYYY-mm-dd`, `today`, `yesterday`, or `N days ago` where `N`
 /// is a positive integer.
-fn parse_date(src: &str) -> Result<Date<Local>> {
-    NaiveDate::parse_from_str(src, "%Y-%m-%d")
+fn parse_date(src: &str) -> Result<Date> {
+    // Try to parse a YYYY-mm-dd date
+    Date::parse(src, &format_description!("[year]-[month]-[day]"))
         .map_err(anyhow::Error::from)
-        .and_then(|d| {
-            Local
-                .from_local_date(&d)
-                .single()
-                .ok_or(anyhow!("Ambiguous date"))
-        })
+        // Try to parse a literal 'today', 'yesterday' or 'N days ago'
         .or_else(|err| {
             if src == "today" {
-                Ok(Local::today())
+                Ok(OffsetDateTime::now_local()?.date())
             } else if src == "yesterday" {
-                Ok(Local::today() - Duration::days(1))
+                Ok(OffsetDateTime::now_local()?.date() - 1.days())
             } else if let Some((days, s)) = src.split_once(" ") {
                 if s.trim() == "days ago" {
-                    if let Ok(days) = days.parse() {
-                        return Ok(Local::today() - Duration::days(days));
+                    if let Ok(days) = days.parse::<i64>() {
+                        return Ok(OffsetDateTime::now_local()?.date() - days.days());
                     }
                 }
                 Err(err)
@@ -77,6 +102,7 @@ fn parse_date(src: &str) -> Result<Date<Local>> {
                 Err(err)
             }
         })
+        .context("Could not parse date")
 }
 
 #[derive(Parser, Debug)]
@@ -126,13 +152,13 @@ enum Subcommand {
     Start {
         #[clap(help = "Project name (defaults to last project)")]
         project: Option<String>,
-        #[clap(long, short, parse(try_from_str = parse_start_date), help = "Start date (defaults to now)")]
-        from: Option<DateTime<Local>>,
+        #[clap(long, short, parse(try_from_str = parse_datetime), help = "Start date (defaults to now)")]
+        from: Option<OffsetDateTime>,
     },
     #[clap(about = "Stop ongoing timer", display_order = 2)]
     Stop {
-        #[clap(long, short, parse(try_from_str = parse_start_date), help = "Stop date (defaults to now)")]
-        at: Option<DateTime<Local>>,
+        #[clap(long, short, parse(try_from_str = parse_datetime), help = "Stop date (defaults to now)")]
+        at: Option<OffsetDateTime>,
     },
     #[clap(about = "Cancel ongoing timer", display_order = 3)]
     Cancel,
@@ -147,7 +173,7 @@ enum Subcommand {
     )]
     Visualize {
         #[clap(parse(try_from_str = parse_date), help = "Date (defaults to today)")]
-        date: Option<Date<Local>>,
+        date: Option<Date>,
     },
 }
 
@@ -162,50 +188,54 @@ impl Default for Subcommand {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+/// A time-tracking entry associated with a project.
 struct Entry {
     project: String,
-    start: DateTime<Local>,
-    end: Option<DateTime<Local>>,
+    #[serde(with = "time::serde::rfc3339")]
+    start: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    end: Option<OffsetDateTime>,
 }
 
 impl Entry {
-    /// A time-tracking entry associated with a project.
-
     /// Start a new entry from the current date/time.
     fn start(project: String) -> Self {
-        Self::start_from(project, Local::now())
+        Self::start_from(
+            project,
+            OffsetDateTime::now_local().expect("Could not determine local datetime"),
+        )
     }
 
     /// Start a new entry from a specific date/time.
     ///
     /// Panics if the start time is in the future.
-    fn start_from(project: String, start: DateTime<Local>) -> Self {
-        if start > Local::now() {
+    fn start_from(project: String, start: OffsetDateTime) -> Self {
+        if start > OffsetDateTime::now_local().expect("Could not determine local datetime") {
             panic!("Start date is in the future");
         }
         Self {
             project,
-            start: start.trunc_subsecs(0),
+            start: start.truncate_subseconds(),
             end: None,
         }
     }
 
     /// Stop the entry at the current date/time.
     fn stop(&mut self) {
-        self.stop_at(Local::now())
+        self.stop_at(OffsetDateTime::now_local().expect("Could not determine local datetime"))
     }
 
     /// Stop the entry at a specific date/time.
     ///
     /// Panics if the end time is in the future, or is before the start time.
-    fn stop_at(&mut self, end: DateTime<Local>) {
-        if end > Local::now() {
+    fn stop_at(&mut self, end: OffsetDateTime) {
+        if end > OffsetDateTime::now_local().expect("Could not determine local datetime") {
             panic!("End date is in the future");
         }
         if end < self.start {
             panic!("End date is before start date");
         }
-        self.end = Some(end.trunc_subsecs(0))
+        self.end = Some(end.truncate_subseconds());
     }
 
     /// Check whether the entry is still tracking time.
@@ -238,7 +268,7 @@ fn main() -> Result<()> {
 
         if shell == Shell::Fish {
             // For fish shell, never complete on file names
-            writeln!(std::io::stdout(), "complete -c {} -f", bin_name).unwrap();
+            println!("complete -c {} -f", bin_name);
         }
 
         generate(shell, &mut app, bin_name, &mut std::io::stdout());
@@ -319,7 +349,7 @@ fn main() -> Result<()> {
             eprintln!(
                 "Cancelled '{}' (started at {}).",
                 entry.project,
-                entry.start.to_rfc3339()
+                entry.start.format(&Rfc3339)?
             );
 
             write_back(path, &entries)?;
@@ -330,11 +360,12 @@ fn main() -> Result<()> {
             for entry in &entries {
                 table.row([
                     entry.project.clone(),
-                    entry.start.to_rfc3339(),
+                    entry.start.format(&Rfc3339)?,
                     entry
                         .end
                         .as_ref()
-                        .map(DateTime::to_rfc3339)
+                        .map(|dt| dt.format(&Rfc3339))
+                        .transpose()?
                         .unwrap_or_else(String::new),
                 ]);
             }
@@ -345,19 +376,21 @@ fn main() -> Result<()> {
             // BTreeMap instead of HashMap so the keys are sorted :>
             let mut summary = BTreeMap::new();
 
+            let now = OffsetDateTime::now_local()?;
+
             // Collect total time on each project
             for entry in &entries {
                 let total = summary
                     .entry(entry.project.clone())
-                    .or_insert_with(Duration::zero);
-                *total = *total + (entry.end.unwrap_or_else(Local::now) - entry.start);
+                    .or_insert(Duration::ZERO);
+                *total += entry.end.unwrap_or(now) - entry.start;
             }
 
             // Display summary as a table
             let mut table = Table::new(["Project", "Time"]);
             table.align([Alignment::Left, Alignment::Right]);
             for (project, duration) in summary {
-                table.row([project, format!("{}", duration_to_string(duration)?)]);
+                table.row([project, duration_to_string(duration)?]);
             }
             print!("{}", table);
 
@@ -367,7 +400,7 @@ fn main() -> Result<()> {
                     println!(
                         "Ongoing: {} ({})",
                         last.project,
-                        duration_to_string(Local::now() - last.start)?
+                        duration_to_string(now - last.start)?
                     );
                 }
             }
@@ -376,35 +409,30 @@ fn main() -> Result<()> {
         // Weekly
         Subcommand::Summary { weekly: true, .. } => {
             // BTreeMap instead of HashMap so the keys are sorted :>
-            let mut summary = BTreeMap::new();
-            let mut daily_total = [Duration::zero(); 7];
+            let mut summary = BTreeMap::<String, [Duration; 7]>::new();
+            let mut daily_total = [Duration::ZERO; 7];
 
-            let today = Local::today();
+            let now = OffsetDateTime::now_local()?;
+            let today = now.date();
 
             // Collect daily total time on each project
             for entry in &entries {
                 let start = entry.start - args.midnight_offset;
-                let end = entry.end.unwrap_or_else(Local::now) - args.midnight_offset;
+                let end = entry.end.unwrap_or(now) - args.midnight_offset;
 
                 // Iterate over every day between `start` and `end`.
                 // `min(6)` ensures that we don't consider start dates beyond one week
-                for delta in (today - end.date()).num_days() as usize
-                    ..=(today - start.date()).num_days().min(6) as usize
+                for delta in (today - end.date()).whole_days() as usize
+                    ..=(today - start.date()).whole_days().min(6) as usize
                 {
-                    let totals = summary
-                        .entry(entry.project.clone())
-                        .or_insert_with(|| [Duration::zero(); 7]);
+                    let totals = summary.entry(entry.project.clone()).or_default();
 
                     // Duration is min(end, today - delta + 1 day) - max(start, today - delta)
-                    let duration = end.min(
-                        today.and_time(NaiveTime::from_hms(0, 0, 0)).unwrap()
-                            - Duration::days(delta as i64 - 1),
-                    ) - start.max(
-                        today.and_time(NaiveTime::from_hms(0, 0, 0)).unwrap()
-                            - Duration::days(delta as i64),
-                    );
-                    totals[delta] = totals[delta] + duration;
-                    daily_total[delta] = daily_total[delta] + duration;
+                    let duration = end
+                        .min(now.replace_time(Time::MIDNIGHT) - (delta as i64 - 1).days())
+                        - start.max(now.replace_time(Time::MIDNIGHT) - (delta as i64).days());
+                    totals[delta] += duration;
+                    daily_total[delta] += duration;
                 }
             }
 
@@ -426,8 +454,8 @@ fn main() -> Result<()> {
                 (0..7)
                     .rev()
                     .map(|i| today - Duration::days(i))
-                    .map(|d| d.format("%A").to_string())
-                    .collect::<Vec<_>>(),
+                    .map(|d| d.format(&format_description!("[weekday]")))
+                    .collect::<Result<Vec<_>, _>>()?,
             );
             let alignments = week_row(Alignment::Left, vec![Alignment::Right; 7]);
 
@@ -436,12 +464,10 @@ fn main() -> Result<()> {
             for (project, durations) in summary {
                 let row = week_row(
                     project,
-                    durations.into_iter().rev().map(|d| {
-                        format!(
-                            "{}",
-                            duration_to_string(d).expect("could not format duration")
-                        )
-                    }),
+                    durations
+                        .into_iter()
+                        .rev()
+                        .map(|d| duration_to_string(d).expect("could not format duration")),
                 );
                 table.row(row);
             }
@@ -450,12 +476,10 @@ fn main() -> Result<()> {
 
             let row = week_row(
                 "TOTAL".to_owned(),
-                daily_total.into_iter().rev().map(|d| {
-                    format!(
-                        "{}",
-                        duration_to_string(d).expect("could not format duration")
-                    )
-                }),
+                daily_total
+                    .into_iter()
+                    .rev()
+                    .map(|d| duration_to_string(d).expect("could not format duration")),
             );
             table.row(row);
 
@@ -464,7 +488,7 @@ fn main() -> Result<()> {
             println!();
             println!(
                 "Weekly total: {}",
-                duration_to_string(daily_total.into_iter().reduce(std::ops::Add::add).unwrap())?
+                duration_to_string(daily_total.into_iter().sum())?
             );
 
             if let Some(last) = &entries.last() {
@@ -473,7 +497,7 @@ fn main() -> Result<()> {
                     println!(
                         "Ongoing: {} ({})",
                         last.project,
-                        duration_to_string(Local::now() - last.start)?
+                        duration_to_string(now - last.start)?
                     );
                 }
             }
@@ -483,43 +507,44 @@ fn main() -> Result<()> {
         Subcommand::Summary { .. } => {
             // BTreeMap instead of HashMap so the keys are sorted :>
             let mut summary = BTreeMap::new();
-            let mut daily_total = Duration::zero();
+            let mut daily_total = Duration::ZERO;
 
-            let today = Local::today();
+            let now = OffsetDateTime::now_local()?;
+            let today = now.date();
 
             // Collect total time on each project
             for entry in &entries {
                 // Actual start time is max(today at midnight, start),
                 // in case the entry started the day before
-                let start = (entry.start - args.midnight_offset)
-                    .max(today.and_time(NaiveTime::from_hms(0, 0, 0)).unwrap());
-                let end = entry.end.unwrap_or_else(Local::now) - args.midnight_offset;
+                let start =
+                    (entry.start - args.midnight_offset).max(now.replace_time(Time::MIDNIGHT));
+                let end = entry.end.unwrap_or(now) - args.midnight_offset;
 
                 if end.date() == today {
-                    let total = summary
-                        .entry(entry.project.clone())
-                        .or_insert_with(Duration::zero);
+                    let total = summary.entry(entry.project.clone()).or_default();
 
                     let duration = end - start;
-                    *total = *total + duration;
-                    daily_total = daily_total + duration;
+                    *total += duration;
+                    daily_total += duration;
                 }
             }
 
-            println!("Summary for today ({})", today.format("%b %d"));
+            println!(
+                "Summary for today ({})",
+                today.format(&format_description!(
+                    "[month repr:short] [day padding:zero]"
+                ))?
+            );
             println!();
 
             // Display summary as a table
             let mut table = Table::new(["Project", "Time"]);
             table.align([Alignment::Left, Alignment::Right]);
             for (project, duration) in summary {
-                table.row([project, format!("{}", duration_to_string(duration)?)]);
+                table.row([project, duration_to_string(duration)?]);
             }
             table.row(["", ""]);
-            table.row([
-                "TOTAL".to_owned(),
-                format!("{}", duration_to_string(daily_total)?),
-            ]);
+            table.row(["TOTAL".to_owned(), duration_to_string(daily_total)?]);
             print!("{}", table);
 
             if let Some(last) = &entries.last() {
@@ -528,7 +553,7 @@ fn main() -> Result<()> {
                     println!(
                         "Ongoing: {} ({})",
                         last.project,
-                        duration_to_string(Local::now() - last.start)?
+                        duration_to_string(now - last.start)?
                     );
                 }
             }
@@ -540,7 +565,7 @@ fn main() -> Result<()> {
             Command::new(&editor)
                 .arg(&args.temps_file)
                 .status()
-                .expect(&format!("could run editor '{}'", editor));
+                .unwrap_or_else(|_| panic!("could not run editor '{}'", editor));
         }
 
         Subcommand::Visualize { date } => {
@@ -551,11 +576,13 @@ fn main() -> Result<()> {
             //   if there's a project.  This would also make it easier to scale this to
             //   multiple projects.
 
-            let midnight = NaiveTime::from_hms(0, 0, 0);
+            let now = OffsetDateTime::now_local()?;
+            let today = now.date();
+
             let date = date
-                .unwrap_or_else(Local::today)
-                .and_time(midnight)
-                .expect(&format!("Invalid datetime {:?} at midnight", date));
+                .unwrap_or(today)
+                .with_time(Time::MIDNIGHT)
+                .assume_offset(now.offset());
             let next_date = date + Duration::days(1);
 
             let mut slots = vec![];
@@ -563,14 +590,15 @@ fn main() -> Result<()> {
 
             for entry in &entries {
                 let start = entry.start;
-                let end = entry.end.unwrap_or_else(Local::now);
+                let end = entry.end.unwrap_or(now);
 
                 // Does the entry overlap with today?
                 if start < next_date && end >= date {
                     // Convert start/end to quarter-hours
-                    let s = ((start.max(date).time() - midnight).num_minutes() as f32 / 15.).round()
-                        as i64;
-                    let e = ((end.min(next_date).time() - midnight).num_minutes() as f32 / 15.)
+                    let s = ((start.max(date).time() - Time::MIDNIGHT).whole_minutes() as f32 / 15.)
+                        .round() as i64;
+                    let e = ((end.min(next_date).time() - Time::MIDNIGHT).whole_minutes() as f32
+                        / 15.)
                         .round() as i64;
                     if s == e {
                         // Skip very short slots
@@ -616,7 +644,8 @@ fn main() -> Result<()> {
                 if i % 8 == 0 {
                     print!(
                         "{:width$} ",
-                        (midnight + Duration::minutes(i * 15)).format("%H:%M"),
+                        (Time::MIDNIGHT + (i * 15).minutes())
+                            .format(&format_description!("[hour]:[minute]"))?,
                         width = times_width - 1
                     );
                 } else if i % 8 == 6 {
@@ -683,7 +712,7 @@ fn main() -> Result<()> {
 /// );
 /// ```
 fn duration_to_string(duration: Duration) -> Result<String, std::fmt::Error> {
-    let minutes = duration.num_minutes();
+    let minutes = duration.whole_minutes();
     let hours = minutes / 60;
     let minutes = minutes % 60;
 

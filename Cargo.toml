@@ -7,7 +7,14 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3.7", features = [
+	"serde",
+	"serde-well-known",
+	"parsing",
+	"formatting",
+	"local-offset",
+	"macros",
+] }
 csv = "1.1"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "3", features = ["derive", "env"] }
