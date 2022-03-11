@@ -2,6 +2,8 @@
 
 ## Installation
 
+### With Cargo
+
 Clone the repo and install with `cargo install`:
 
 ```sh
@@ -11,6 +13,31 @@ cargo install --path .
 ```
 
 If you don't have `cargo`, you can [install it here](https://doc.rust-lang.org/cargo/getting-started/installation.html).
+
+
+### With Nix
+
+If you have flakes enabled, you can try `temps` without installing it in your system with `nix shell`:
+
+```sh
+nix shell github:xlambein/temps
+```
+
+If you're running `NixOS`, you can include the following e.g. in home-manager:
+
+```nix
+let
+  temps = (import (pkgs.fetchFromGitHub {
+    owner = "xlambein";
+    repo = "temps";
+    rev = ""; # Insert latest commit hash
+    sha256 = ""; # Leave empty and build once to get the actual SHA
+  })).default;
+in {
+  home.packages = [ temps ];
+}
+```
+
 
 ## Usage
 
@@ -79,7 +106,7 @@ Started 'learning rust'.
 
 Display a graph of the time spent on a given day (defaults to today):
 
-``` sh
+```sh
 $ temps viz
 ▁▁▁▁▁▁
 10:00 
@@ -107,7 +134,7 @@ $ temps viz 2021-08-10
 
 Edit the raw data with your `$EDITOR`:
 
-``` sh
+```sh
 $ temps edit
 ```
 
@@ -119,12 +146,24 @@ By default, the day is assumed to start at midnight of your local timezone.  To 
 
 Autocompletions for common shells are provided courtesy of [`clap_complete`](https://crates.io/crates/clap_complete).  Just pipe the output of the following command into the appropriate file for your shell.
 
-``` sh
+```sh
 $ temps --generate-completions <SHELL>
 ```
 
 For example, if you're using Fish Shell:
 
-``` sh
+```sh
 $ temps --generate-completions fish > ~/.config/fish/completions/temps.fish
+```
+
+On NixOS with home-manager, the following configuration will automatically add completions for your favourite shell (here `fish`):
+
+```nix
+xdg.configFile = 
+  let
+    completions = pkgs.runCommand "temps-fish-completions" {
+      buildInputs = [ temps ];
+    } "temps --generate-completions fish > $out";
+  in
+    { "fish/completions/temps.fish".source = completions.out; };
 ```
