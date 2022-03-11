@@ -296,8 +296,17 @@ fn main() -> Result<()> {
             // Stop previous entry if it's still ongoing
             if let Some(last) = entries.last_mut() {
                 if last.is_ongoing() {
-                    last.stop();
-                    eprintln!("Stopped '{}'.", last.project);
+                    if let Some(from) = from {
+                        last.stop_at(from);
+                        eprintln!(
+                            "Stopped '{}' at {}.",
+                            last.project,
+                            datetime_to_human_string(from).context("Could not format datetime")?
+                        );
+                    } else {
+                        last.stop();
+                        eprintln!("Stopped '{}'.", last.project);
+                    }
                 }
             }
 
@@ -312,7 +321,15 @@ fn main() -> Result<()> {
                 Entry::start(project)
             };
 
-            eprintln!("Started '{}'.", entry.project);
+            if let Some(from) = from {
+                eprintln!(
+                    "Started '{}' from {}.",
+                    entry.project,
+                    datetime_to_human_string(from).context("Could not format datetime")?
+                );
+            } else {
+                eprintln!("Started '{}'.", entry.project);
+            }
             entries.push(entry);
 
             write_back(path, &entries)?;
@@ -724,4 +741,14 @@ fn duration_to_string(duration: Duration) -> Result<String, std::fmt::Error> {
     }
 
     Ok(result)
+}
+
+/// Converts an [`OffsetDateTime`] to a string, possibly omitting the date.
+fn datetime_to_human_string(dt: OffsetDateTime) -> Result<String, time::error::Format> {
+    let now = OffsetDateTime::now_local().unwrap();
+    if now.date() != dt.date() {
+        dt.format(format_description!("[year]-[month]-[day] [hour]:[minute]"))
+    } else {
+        dt.format(format_description!("[hour]:[minute]"))
+    }
 }
