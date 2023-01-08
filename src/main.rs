@@ -1,10 +1,11 @@
 use std::convert::TryInto;
 use std::env;
+use std::path::PathBuf;
 use std::process::Command;
 use std::{collections::BTreeMap, fmt::Write, path::Path};
 
 use anyhow::{bail, Context, Result};
-use clap::{IntoApp, Parser};
+use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Shell};
 use csv::{ReaderBuilder, WriterBuilder};
 use serde::{Deserialize, Serialize};
@@ -105,6 +106,14 @@ fn parse_date(src: &str) -> Result<Date> {
         .context("Could not parse date")
 }
 
+fn default_temps_file() -> PathBuf {
+    if let Some(dirs) = directories::ProjectDirs::from("", "", "temps") {
+        dirs.data_dir().join("temps.tsv")
+    } else {
+        panic!("could not determine project dir")
+    }
+}
+
 #[derive(Parser, Debug)]
 #[clap(about = "Simple time tracker.", version, author)]
 struct Args {
@@ -113,14 +122,14 @@ struct Args {
     #[clap(
         long,
         env,
-        default_value = "~/temps.tsv",
+        default_value_os_t = default_temps_file(),
         help = "Path for the tracking data"
     )]
-    temps_file: String,
+    temps_file: PathBuf,
     #[clap(
         long,
         env = "TEMPS_MIDNIGHT_OFFSET",
-        parse(try_from_str = parse_duration),
+        value_parser = parse_duration,
         default_value = "00:00",
         help = "Time at which we consider the current day to have ended"
         // It's not necessarily midnight because sometimes we make poor choices
@@ -152,12 +161,12 @@ enum Subcommand {
     Start {
         #[clap(help = "Project name (defaults to last project)")]
         project: Option<String>,
-        #[clap(long, short, parse(try_from_str = parse_datetime), help = "Start date (defaults to now)")]
+        #[clap(long, short, value_parser = parse_datetime, help = "Start date (defaults to now)")]
         from: Option<OffsetDateTime>,
     },
     #[clap(about = "Stop ongoing timer", display_order = 2)]
     Stop {
-        #[clap(long, short, parse(try_from_str = parse_datetime), help = "Stop date (defaults to now)")]
+        #[clap(long, short, value_parser = parse_datetime, help = "Stop date (defaults to now)")]
         at: Option<OffsetDateTime>,
     },
     #[clap(about = "Cancel ongoing timer", display_order = 3)]
@@ -172,7 +181,7 @@ enum Subcommand {
         name = "viz"
     )]
     Visualize {
-        #[clap(parse(try_from_str = parse_date), help = "Date (defaults to today)")]
+        #[clap(value_parser = parse_date, help = "Date (defaults to today)")]
         date: Option<Date>,
     },
 }
@@ -263,7 +272,7 @@ fn main() -> Result<()> {
 
     if let Some(shell) = args.generate_completions {
         // Generate completions then exit
-        let mut app = Args::into_app();
+        let mut app = Args::command();
         let bin_name = app.get_name().to_string();
 
         if shell == Shell::Fish {

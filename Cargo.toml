@@ -17,5 +17,6 @@ time = { version = "0.3.7", features = [
 ] }
 csv = "1.1"
 serde = { version = "1", features = ["derive"] }
-clap = { version = "3", features = ["derive", "env"] }
-clap_complete = "3"
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+directories = "4.0.1"
