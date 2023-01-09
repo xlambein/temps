@@ -138,7 +138,7 @@ Edit the raw data with your `$EDITOR`:
 $ temps edit
 ```
 
-Tracking data is stored in `~/temps.tsv`.  This location can be changed by setting the environment variable `TEMPS_FILE`, or by passing `--temps-file [PATH]` to `temps`.
+Tracking data is stored in a platform-specific location (on Linux, typically `~/.local/share/temps/temps.tsv`).  This location can be changed by setting the environment variable `TEMPS_FILE`, or by passing `--temps-file [PATH]` to `temps`.
 
 By default, the day is assumed to start at midnight of your local timezone.  To change that, you can set the `TEMPS_MIDNIGHT_OFFSET` environment variable, or pass the `--midnight-offset` option.  It expects a duration of the form `HH:MM` or `HH:MM:SS`.
 
@@ -159,11 +159,13 @@ $ temps --generate-completions fish > ~/.config/fish/completions/temps.fish
 On NixOS with home-manager, the following configuration will automatically add completions for your favourite shell (here `fish`):
 
 ```nix
-xdg.configFile = 
-  let
-    completions = pkgs.runCommand "temps-fish-completions" {
-      buildInputs = [ temps ];
-    } "temps --generate-completions fish > $out";
-  in
-    { "fish/completions/temps.fish".source = completions.out; };
+{
+  xdg.configFile = 
+    let
+      completions = pkgs.runCommand "temps-fish-completions" {
+        buildInputs = [ temps ];
+      } "temps --generate-completions fish > $out";
+    in
+      { "fish/completions/temps.fish".source = completions.out; };
+}
 ```
